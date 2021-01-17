@@ -1,5 +1,5 @@
 import pandas as pd
-
+import numpy as np
 
 def transform_to_description(data: pd.DataFrame):
     transformed_data = pd.DataFrame(columns=data.columns)
@@ -140,7 +140,7 @@ def generate_random_sample(train_data: pd.DataFrame, sample_size: int, d: pd.Ser
         sample = train_data.loc[inds].copy()
     return sample
 
-def check_criterion(d: pd.Series, train_data=train_data, hypothesis_criterion: str, d_other_objects: pd.DataFrame,
+def check_criterion(d: pd.Series, train_data: pd.DataFrame, hypothesis_criterion: str, d_other_objects: pd.DataFrame,
                     other_data: pd.DataFrame, alpha: float):
             
     other_data_size = other_data.shape[0]
@@ -149,12 +149,40 @@ def check_criterion(d: pd.Series, train_data=train_data, hypothesis_criterion: s
     result_hypothesis = None
 
     if hypothesis_criterion == 'contr_class':
-        result_hypothesis = d if d_other_objects_size <= d_other_objs_thresh else None
+        result_hypothesis = None
+        if d_other_objects_size <= d_other_objs_thresh:
+            result_hypothesis = d
+        #result_hypothesis = d if d_other_objects_size <= d_other_objs_thresh else None
     elif hypothesis_criterion == 'both_classes':
     #дополнительно смотрим какие объекты target(рассматриваемого на этой итерации) класса попадают в паттерн d
         d_target_objects = is_included_in_repr(d, train_data=train_data)
         d_target_objects_size = d_target_objects.shape[0]
         d_target_objs_thresh = int(d_target_objects_size * alpha)
-        result_hypothesis = d if d_other_objects_size <= d_target_objs_thresh else None
+        result_hypothesis = None
+        if d_other_objects_size <= d_target_objs_thresh:
+            result_hypothesis = d
+#         result_hypothesis = d if d_other_objects_size <= d_target_objs_thresh else None
 
     return result_hypothesis
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
