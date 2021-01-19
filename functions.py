@@ -129,13 +129,15 @@ def generate_random_sample(train_data: pd.DataFrame, sample_size: int, d: pd.Ser
     """
     
     if d is not None:
+        print('using local sampling')
         local_objects = is_included_in_repr(d=d, train_data=train_data)
         if local_objects is None:
             print(f'cannot generate sample. Got 0 train data in local area')
-            return None
+            raise NotImplementedError('Wrong local sampling area')
         inds = np.random.RandomState().choice(local_objects.index, replace=False, size=sample_size)
         sample = local_objects.loc[inds]
     else:
+        print('using random sampling')
         inds = np.random.RandomState().choice(train_data.index, replace=False, size=sample_size)
         sample = train_data.loc[inds].copy()
     return sample
@@ -149,12 +151,14 @@ def check_criterion(d: pd.Series, train_data: pd.DataFrame, hypothesis_criterion
     result_hypothesis = None
 
     if hypothesis_criterion == 'contr_class':
-        result_hypothesis = None
         if d_other_objects_size <= d_other_objs_thresh:
             result_hypothesis = d
-        #result_hypothesis = d if d_other_objects_size <= d_other_objs_thresh else None
-    elif hypothesis_criterion == 'both_classes':
+        else:
+            pass#reject
+        
+    if hypothesis_criterion == 'both_classes':
     #дополнительно смотрим какие объекты target(рассматриваемого на этой итерации) класса попадают в паттерн d
+    #!!!!Все таки здесь нужно добавить еще член соотношения классов
         d_target_objects = is_included_in_repr(d, train_data=train_data)
         d_target_objects_size = d_target_objects.shape[0]
         d_target_objs_thresh = int(d_target_objects_size * alpha)
