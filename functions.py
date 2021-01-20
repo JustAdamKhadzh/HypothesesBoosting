@@ -137,7 +137,7 @@ def generate_random_sample(train_data: pd.DataFrame, sample_size: int, d: pd.Ser
         inds = np.random.RandomState().choice(local_objects.index, replace=False, size=sample_size)
         sample = local_objects.loc[inds]
     else:
-        print('using random sampling')
+        #print('using random sampling')
         inds = np.random.RandomState().choice(train_data.index, replace=False, size=sample_size)
         sample = train_data.loc[inds].copy()
     return sample
