@@ -49,8 +49,7 @@ def is_included_in_repr(d: pd.Series, train_data: pd.DataFrame):
     return d_list
 
 
-#данную функцию переписали, чтобы соответствовала общей логике подсчета
-def generate_local_area(obj: pd.Series):
+def generate_local_area(obj: pd.Series, train_min: pd.Series, train_max: pd.Series):
     
     """
     generates local area for obj expanding each feature by base value
@@ -61,11 +60,17 @@ def generate_local_area(obj: pd.Series):
     local_obj = {}
     for feat, val in obj.items():
         left_val, right_val = val
+
         if isinstance(left_val, int):
             eps = 1 if abs(left_val) // 100 == 0 else 100
         elif isinstance(left_val, float):
             eps = 0.01 if abs(left_val) // 10 == 0 else 100
-        left_val, right_val = left_val - eps, right_val + eps
+
+        if left_val > train_min[feat]:
+            left_val = left_val - eps
+        if right_val < train_max[feat]:
+            right_val = right_val + eps
+        # left_val, right_val = left_val - eps, right_val + eps
         local_obj[feat] = (left_val, right_val)
     local_obj = pd.Series(local_obj)
     local_obj.name = index
@@ -76,8 +81,9 @@ def generate_local_area(obj: pd.Series):
 #Чтобы не получилось, что возраст отрицательный. Можно передавать в качестве параметра вектор минимальных и максимальных значений
 #для всех признаков
 def find_opt_local_area(obj: pd.Series, train_data: pd.DataFrame,
+                    trainx_min: pd.Series, trainx_max: pd.Series,
                        frac: float = 0.15, num_iters=10):
-    
+
     """
     generates optimal local area. Tries iteratively to generate local area
     that have at least len(train_data) * frac train objects or using at most num_iterations
@@ -86,15 +92,15 @@ def find_opt_local_area(obj: pd.Series, train_data: pd.DataFrame,
     """
     #нужно запихнуть сюда код, который занимается именно поиском области,
     #а в generate_local_sample оставить именно генерацию семпла по области
-    iters = num_iters
+    iters = 1#num_iters
     is_found = False
     d_local_area = obj
     objects_count = 0
     objects_count_thresh = int(train_data.shape[0] * frac)
     print(f"start generating local area")
-    while objects_count < objects_count_thresh and iters > 0:
+    while objects_count < objects_count_thresh and iters <= num_iters:
         print(f"itr: {iters}")
-        d_local_area = generate_local_area(obj=d_local_area)
+        d_local_area = generate_local_area(obj=d_local_area, train_min=trainx_min, train_max=trainx_max)
         d_local_objects = is_included_in_repr(d=d_local_area, train_data=train_data)
         if d_local_objects is not None:
             objects_count = d_local_objects.shape[0]
@@ -105,7 +111,7 @@ def find_opt_local_area(obj: pd.Series, train_data: pd.DataFrame,
                 break
         else:
             print(f'found 0 objects in this local area')
-        iters -= 1 
+        iters += 1 
     if not is_found:
         print(f"not enough iterations. try more iterations/ Current num_iters = {num_iters}")
     return d_local_area if is_found else None
@@ -139,33 +145,39 @@ def generate_random_sample(train_data: pd.DataFrame, sample_size: int, d: pd.Ser
     else:
         #print('using random sampling')
         inds = np.random.RandomState().choice(train_data.index, replace=False, size=sample_size)
-        sample = train_data.loc[inds].copy()
+        sample = train_data.loc[inds]
     return sample
 
 def check_criterion(d: pd.Series, train_data: pd.DataFrame, hypothesis_criterion: str, d_other_objects: pd.DataFrame,
                     other_data: pd.DataFrame, alpha: float):
-            
+
+    """Checks whether d hypothesis satisfies hypothesis_criterion
+
+    Returns pd.Series or None
+    """
+
+    train_data_size = train_data.shape[0]
     other_data_size = other_data.shape[0]
+    classes_ratio = train_data_size / other_data_size
+
     d_other_objects_size = d_other_objects.shape[0]
-    d_other_objs_thresh = int(other_data_size * alpha)
+    #убрал у порогов преобразование в инт тип
+    d_other_objs_thresh = other_data_size * alpha 
+
     result_hypothesis = None
 
     if hypothesis_criterion == 'contr_class':
         if d_other_objects_size <= d_other_objs_thresh:
             result_hypothesis = d
-        else:
-            pass#reject
+        #else reject hypothesis
         
     if hypothesis_criterion == 'both_classes':
-    #дополнительно смотрим какие объекты target(рассматриваемого на этой итерации) класса попадают в паттерн d
-    #!!!!Все таки здесь нужно добавить еще член соотношения классов
+
         d_target_objects = is_included_in_repr(d, train_data=train_data)
         d_target_objects_size = d_target_objects.shape[0]
-        d_target_objs_thresh = int(d_target_objects_size * alpha)
-        result_hypothesis = None
-        if d_other_objects_size <= d_target_objs_thresh:
-            result_hypothesis = d
-#         result_hypothesis = d if d_other_objects_size <= d_target_objs_thresh else None
+        classes_ratio_thresh = alpha * classes_ratio
+        if d_target_objects_size / d_other_objects_size > classes_ratio_thresh:
+            return d
 
     return result_hypothesis
 
