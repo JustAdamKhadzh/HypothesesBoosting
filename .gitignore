@@ -4,4 +4,4 @@ __pycache__/
 hypothesises/
 Datasets/
 PDF_Files/
-
+*.txt

@@ -76,10 +76,6 @@ def generate_local_area(obj: pd.Series, train_min: pd.Series, train_max: pd.Seri
     local_obj.name = index
     return local_obj
 
-#здесь высчитвается локальная область, которая передается функции генерации семпла
-#сейчас расширение области делается в отрыве от самих данных. Нужно предусмотреть ограничения на расширение признака
-#Чтобы не получилось, что возраст отрицательный. Можно передавать в качестве параметра вектор минимальных и максимальных значений
-#для всех признаков
 def find_opt_local_area(obj: pd.Series, train_data: pd.DataFrame,
                     trainx_min: pd.Series, trainx_max: pd.Series,
                        frac: float = 0.15, num_iters=10):
@@ -90,31 +86,31 @@ def find_opt_local_area(obj: pd.Series, train_data: pd.DataFrame,
     iterations.
     returns pd.Series if found opt local area or None
     """
-    #нужно запихнуть сюда код, который занимается именно поиском области,
-    #а в generate_local_sample оставить именно генерацию семпла по области
-    iters = 1#num_iters
+    print(f'num_iters = {num_iters}')
+    iters = 0#num_iters
     is_found = False
     d_local_area = obj
     objects_count = 0
     objects_count_thresh = int(train_data.shape[0] * frac)
     print(f"start generating local area")
     while objects_count < objects_count_thresh and iters <= num_iters:
+        iters += 1 
         print(f"itr: {iters}")
         d_local_area = generate_local_area(obj=d_local_area, train_min=trainx_min, train_max=trainx_max)
         d_local_objects = is_included_in_repr(d=d_local_area, train_data=train_data)
         if d_local_objects is not None:
             objects_count = d_local_objects.shape[0]
-            print(f"d_local_objects = {objects_count}")
-            if objects_count > objects_count_thresh:
-                print(f"found opt local area for object")
+            #print(f"d_local_objects = {objects_count}")
+            if objects_count >= objects_count_thresh:
+                #print(f"found opt local area for object")
                 is_found = True
                 break
         else:
             print(f'found 0 objects in this local area')
-        iters += 1 
+        
     if not is_found:
         print(f"not enough iterations. try more iterations/ Current num_iters = {num_iters}")
-    return d_local_area if is_found else None
+    return d_local_area if is_found else None, iters
 
 def generate_local_sample(d: pd.Series, train_data: pd.DataFrame, sample_size: int):
     
@@ -149,7 +145,7 @@ def generate_random_sample(train_data: pd.DataFrame, sample_size: int, d: pd.Ser
     return sample
 
 def check_criterion(d: pd.Series, train_data: pd.DataFrame, hypothesis_criterion: str, d_other_objects: pd.DataFrame,
-                    other_data: pd.DataFrame, alpha: float):
+                    other_data: pd.DataFrame, alpha: float, classes_ratio: float):
 
     """Checks whether d hypothesis satisfies hypothesis_criterion
 
@@ -158,7 +154,7 @@ def check_criterion(d: pd.Series, train_data: pd.DataFrame, hypothesis_criterion
 
     train_data_size = train_data.shape[0]
     other_data_size = other_data.shape[0]
-    classes_ratio = train_data_size / other_data_size
+    #classes_ratio = train_data_size / other_data_size
 
     d_other_objects_size = d_other_objects.shape[0]
     #убрал у порогов преобразование в инт тип
