@@ -1,6 +1,9 @@
 import pandas as pd
 import numpy as np
 
+from functools import partial
+from concurrent.futures import ProcessPoolExecutor, Executor, as_completed
+
 def transform_to_description(data: pd.DataFrame):
     transformed_data = pd.DataFrame(columns=data.columns)
     
@@ -113,7 +116,7 @@ def find_opt_local_area(obj: pd.Series, train_data: pd.DataFrame,
 #             print(f'found 0 objects in this local area')
         
     if not is_found:
-        print(f"not enough iterations. try more iterations/ Current num_iters = {num_iters}")
+        print(f"not enough iterations. try more iterations/ Current num_iters = {expanding_iters}")
     return d_local_area if is_found else None#, iters
 
 def generate_local_sample(d: pd.Series, train_data: pd.DataFrame, sample_size: int):
@@ -135,10 +138,6 @@ def generate_random_sample(train_data: pd.DataFrame, sample_size: int, d: pd.Ser
     """
     
     if d is not None:
-#         print('using local sampling')
-#         print('in generate random sample')
-#         print(f"d = {len(d)}")
-#         print(f"train data type = {type(train_data)}")
         local_objects = is_included_in_repr(d=d, train_data=train_data)
         if local_objects is None:
             print(f'cannot generate sample. Got 0 train data in local area')
@@ -195,83 +194,278 @@ def check_criterion(d: pd.Series, train_data: pd.DataFrame, hypothesis_criterion
 
 
 
-#old version, very slow
-def hypothesises_to_feat_matrix(pos_hyps: pd.DataFrame, neg_hyps: pd.DataFrame, trainX: pd.DataFrame):
-    pos_features = [f'pos_feat_{feat_num}' for feat_num in pos_hyps.index]
-#     neg_features = [f'neg_feat_{feat_num}' for feat_num in neg_hyps[pi]s.index]
-    
-    result = pd.DataFrame(index=trainX.index, columns=pos_features)# + neg_features)
-    
-    for i in range(trainX.shape[0]):
-        for pi in range(pos_hyps.shape[0]):
 
-            feat_repr = utils.similarity(obj, pos_hyps.iloc[pi])
-            is_included = pos_hyps.iloc[pi].equals(feat_repr)
-            if is_included:
-                result.loc[i, f'pos_feat_{pi}'] = 1
+def generate_hypothesis(iteration: int, obj: pd.Series, object_area: pd.Series, train_data: pd.DataFrame, 
+                        other_data: pd.DataFrame, sample_size: int, hypothesis_criterion: str,
+                        sample_type:str, verbose: bool, alpha: float):
+        
+        if iteration % 100 == 0:
+            print(f'iteration: {iteration}')
+        
+        if sample_type == 'local' and object_area is None:
+            print(f'Cannot generate sample from local area. Got None as local object area param!')
+            raise NotImplementedError('Wrong params for local sampling!')
+    
+        if sample_type == 'random' and object_area is not None:
+            print(f'got misleading params values. Got sample_type = None and local object area is not None')
+            return NotImplementedError('Wrong params for random sampling!')
+
+        sample = generate_random_sample(train_data=train_data, sample_size=sample_size, d=object_area) 
+        if sample is None:
+            return None
+        
+        sample.append(obj)
+        
+        d = get_similarity_sample_repr(sample)
+        if verbose:
+            print('got feature represantation for sample')
+        
+        d_other_objects = is_included_in_repr(d, train_data=other_data)
+        
+        if verbose and d_other_objects is not None:
+            print(f'got {d_other_objects.shape[0]} d_other_objects')
+            print(f'thresh for hypothesis = {int(other_data.shape[0] * alpha)}')
+        
+        result_hypothesis = check_criterion(
+                        d=d, train_data=train_data, hypothesis_criterion=hypothesis_criterion, 
+                        d_other_objects=d_other_objects, other_data=other_data, alpha=alpha)
+
+        return result_hypothesis
+        
+
+def mining_step(test_obj: pd.Series, train_pos: pd.DataFrame, train_neg: pd.DataFrame, sample_ratio: float, 
+                alpha: float, hypothesis_criterion: str, sample_type: str, trainx_min: pd.Series, 
+                trainx_max:pd.Series, fraction: float = 0.25, num_iters: int = 1000, expanding_iters: int = 50, 
+                mining_type: str = 'pos', verbose : bool = False, n_jobs : int = 4):
+    """
+    hypothesis_criterion: 'contr_class', если используем базовый критерий, 
+                                когда смотрится пересечение с противоположным классом(старый критерий отбора гипотез)
+                           'both_classes', когда интересует пересечение по обоим классам(новый критерий отбора гипотез)
+                           
+    sample_type: 'random', если берем произвольную выборку интервальных представлений
+                 'local', если берем произвольную выборку из локальной области
+    
+    returns list of hypothesises
+    """
+    
+    train_data = train_pos if mining_type == 'pos' else train_neg
+    other_data = train_neg if mining_type == 'pos' else train_pos
+    sample_size = int(train_data.shape[0] * sample_ratio)
+    #print('start generating hypothesises')
+    
+    if sample_type == 'local':
+        #print(f'start searching optimal local area')
+        object_area = None
+        itrs = 3
+        while itrs > 0:
+            object_area = find_opt_local_area(obj=test_obj, train_data=train_data,
+                                                    trainx_min=trainx_min, trainx_max=trainx_max, 
+                                                    frac=fraction, expanding_iters=expanding_iters)
+            if object_area is None:
+                expanding_iters += expanding_iters
+                itrs = itrs - 1
             else:
-                result.loc[i, f'pos_feat_{pi}'] = 0
-                
-        for pi in range(neg_hyps.shape[0]):
-            feat_repr = utils.similarity(obj, neg_hyps.iloc[pi])
-            is_included = neg_hyps.iloc[pi].equals(feat_repr)
-            if is_included:
-                result.loc[i, f'neg_feat_{pi}'] = 1
-            else:
-                result.loc[i, f'neg_feat_{pi}'] = 0
+                break
+        if object_area is None:
+            sample_type = 'random'
+    else:
+        object_area = None
     
     
-    return result
+    mining = partial(generate_hypothesis, obj=test_obj, object_area=object_area, train_data=train_data, 
+                     other_data=other_data, sample_size=sample_size, hypothesis_criterion=hypothesis_criterion,
+                     sample_type=sample_type, verbose=verbose, alpha=alpha)
     
+    with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+        hypothesises = executor.map(mining, range(num_iters))
+        
+    hypothesises = [res for res in hypothesises if res is not None]
+
+    return hypothesises
 
 
-def to_binary_repr(num: int, pos_hyps: pd.DataFrame, neg_hyps: pd.DataFrame, indices: list, trainX: pd.DataFrame):
+
+def mining_temp_layer(test_obj_index, test_sample, train_pos, train_neg, sample_ratio, alpha, 
+                      hypothesis_criterion, sample_type, trainx_min, trainx_max, fraction, num_iters,
+                      expanding_iters, mining_type, verbose, n_jobs):
+    
+    test_obj = test_sample.loc[test_obj_index]
+    
+    print(f'object ind = {test_obj_index}')
+    
+    pos_hyps = mining_step(test_obj=test_obj, train_pos=train_pos, train_neg=train_neg, sample_ratio=sample_ratio, 
+                alpha=alpha, hypothesis_criterion=hypothesis_criterion, sample_type=sample_type, 
+                trainx_min=trainx_min, trainx_max=trainx_max, fraction=fraction, num_iters=num_iters,
+                expanding_iters=expanding_iters, mining_type='pos', verbose=verbose, n_jobs=n_jobs)
+    
+    pos_hyps = pd.DataFrame(pos_hyps).drop_duplicates()
+    pos_hyps_shape = pos_hyps.shape[0] if len(pos_hyps) > 0 else 0
+    
+   # print('got pos_hyps')
+    
+#     total_pos_objs = 0
+#     if pos_hyps_shape > 0:
+#         for hyp in pos_hyps.iterrows():
+#             pos_objs = is_included_in_repr(hyp, train_pos)
+#             pos_objs_shape = 0 if pos_objs is None else pos_objs.shape[0]
+#             total_pos_objs += pos_objs_shape
+    
+#     print('got pos_hyps objects')
+
+    neg_hyps = mining_step(test_obj=test_obj, train_pos=train_pos, train_neg=train_neg, sample_ratio=sample_ratio, 
+                alpha=alpha, hypothesis_criterion=hypothesis_criterion, sample_type=sample_type, 
+                trainx_min=trainx_min, trainx_max=trainx_max, fraction=fraction, num_iters=num_iters,
+                expanding_iters=expanding_iters, mining_type='neg', verbose=verbose, n_jobs=n_jobs)
+    
+    neg_hyps = pd.DataFrame(neg_hyps).drop_duplicates()
+    neg_hyps_shape = neg_hyps.shape[0] if len(neg_hyps) > 0 else 0
+
+#     print('got neg_hyps')
+    
+#     total_neg_objs = 0
+#     if neg_hyps_shape > 0:
+#         for hyp in neg_hyps.iterrows():
+#             neg_objs = is_included_in_repr(hyp, train_neg)
+#             neg_objs_shape = 0 if neg_objs is None else neg_objs.shape[0]
+#             total_neg_objs += neg_objs_shape
+            
+#     print('got neg_hyps objects')
+            
+#     print(pos_hyps_shape, neg_hyps_shape, total_pos_objs, total_neg_objs)
+    
+    return (pos_hyps_shape, neg_hyps_shape)#, total_pos_objs, total_neg_objs)
+
+
+def mining_objs_parallel(test_sample: pd.DataFrame, train_pos: pd.DataFrame, train_neg: pd.DataFrame, 
+                              sample_ratio: float, alpha: float, hypothesis_criterion: str, 
+                              sample_type: str, trainx_min: pd.Series, trainx_max:pd.Series,
+                              fraction: float = 0.25, num_iters: int = 1000, expanding_iters: int = 50, 
+                              mining_type: str = 'pos', verbose : bool = False, num_workers: int = 4, 
+                             n_jobs : int = 2):
+    
+    test_sample_index = test_sample.index
+    
+    mining = partial(mining_temp_layer, test_sample=test_sample, train_pos=train_pos, train_neg=train_neg,
+                     sample_ratio=sample_ratio, alpha=alpha, hypothesis_criterion = hypothesis_criterion,
+                     sample_type=sample_type, trainx_min=trainx_min, trainx_max=trainx_max, fraction=fraction, 
+                     num_iters=num_iters, expanding_iters=expanding_iters, mining_type=mining_type, 
+                     verbose=verbose, n_jobs=n_jobs)
+    
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        hypo_shapes = executor.map(mining, test_sample_index)
+        
+    hypothesises = [{ind: {'pos': pos, 
+                           'neg': neg}
+                    } for ind, (pos, neg) in zip(test_sample_index, hypo_shapes)
+                   ]
+
+    return hypothesises
+
+
+def to_binary_repr_old(num: int, pos_hyps: pd.DataFrame, neg_hyps: pd.DataFrame, indices: list, trainX: pd.DataFrame):
     ind = indices[num]
+    
+    if num % 50 == 0:
+        print(f'processing obj = {num}')
     obj = trainX.loc[ind]
-    pos_features = [f'pos_feat_{feat_num}' for feat_num in pos_hyps.index]
-    neg_features = [f'neg_feat_{feat_num}' for feat_num in neg_hyps.index]
+    pos_features = [f'pos_f_{feat_num}' for feat_num in pos_hyps.index]
+    neg_features = [f'neg_f_{feat_num}' for feat_num in neg_hyps.index]
     features = pos_features + neg_features
     start_values = np.zeros(shape=(1, len(features)))
-#     print(start_values.shape)
-#     print(obj.name)
+
     result = pd.DataFrame(data=start_values,index=[obj.name], columns=features, dtype='int')
     ind = obj.name
     for pi in range(pos_hyps.shape[0]):
         feat_repr = utils.similarity(obj, pos_hyps.iloc[pi])
         is_included = pos_hyps.iloc[pi].equals(feat_repr)
         if is_included:
-            result.loc[ind, f'pos_feat_{pi}'] = 1
+            result.loc[ind, f'pos_f_{pi}'] = 1
         else:
-            result.loc[ind, f'pos_feat_{pi}'] = 0
+            result.loc[ind, f'pos_f_{pi}'] = 0
         
     for pi in range(neg_hyps.shape[0]):
         feat_repr = utils.similarity(obj, neg_hyps.iloc[pi])
         is_included = neg_hyps.iloc[pi].equals(feat_repr)
         if is_included:
-            result.loc[ind, f'neg_feat_{pi}'] = 1
+            result.loc[ind, f'neg_f_{pi}'] = 1
         else:
-            result.loc[ind, f'neg_feat_{pi}'] = 0
+            result.loc[ind, f'neg_f_{pi}'] = 0
+                          
+    return result
+
+def to_binary_repr_new(num: int, pos_hyps: pd.DataFrame, neg_hyps: pd.DataFrame, indices: list, trainX: pd.DataFrame):
+    ind = indices[num]
+    
+    #if num % 50 == 0:
+    print(f'processing obj = {num}')
+    obj = trainX.loc[ind]
+    pos_features = [f'pos_f_{feat_num}' for feat_num in pos_hyps.index]
+    neg_features = [f'neg_f_{feat_num}' for feat_num in neg_hyps.index]
+    features = pos_features + neg_features
+    start_values = np.zeros(shape=(1, len(features)))
+
+    result = pd.DataFrame(data=start_values,index=[obj.name], columns=features, dtype='int')
+    ind = obj.name
+    for pi, hyp in pos_hyps.iterrows():
+        feat_repr = utils.similarity(obj, hyp)
+        is_included = hyp.equals(feat_repr)
+        if is_included:
+            result.loc[ind, f'pos_f_{pi}'] = 1
+        else:
+            result.loc[ind, f'pos_f_{pi}'] = 0
+        
+    for pi, hyp in neg_hyps.iterrows():
+        feat_repr = utils.similarity(obj, hyp)
+        is_included = hyp.equals(feat_repr)
+        if is_included:
+            result.loc[ind, f'neg_f_{pi}'] = 1
+        else:
+            result.loc[ind, f'neg_f_{pi}'] = 0
                           
     return result
 
 def transform_to_feature_matrix(pos_hyps: pd.DataFrame, neg_hyps: pd.DataFrame, trainX: pd.DataFrame, n_jobs: int = 4):
     
     indices = trainX.index
-    transform_func = partial(to_binary_repr, pos_hyps=pos_hyps, 
-                             neg_hyps=neg_hyps, indices=indices, trainX=trainX)
+    transform_func = partial(
+            binarization, 
+            pos_hyps=pos_hyps, 
+            neg_hyps=neg_hyps,
+            indices=indices,
+            trainX=trainX
+    )
     
     with ProcessPoolExecutor(max_workers=n_jobs) as executor:
         obj_features = executor.map(transform_func, range(len(indices)))
 
-    features = pd.concat(obj_features)#pd.DataFrame(obj_features)
+    features = pd.concat(obj_features)
     
     return features
 
+def binarization(num: int, pos_hyps: pd.DataFrame, neg_hyps: pd.DataFrame, indices: list, trainX: pd.DataFrame):
+    ind = indices[num]
+    
+    #if num % 50 == 0:
+    print(f'processing obj = {num}')
+    obj = trainX.loc[ind]
+    pos_features = [f'pos_f_{feat_num}' for feat_num in pos_hyps.index]
+    neg_features = [f'neg_f_{feat_num}' for feat_num in neg_hyps.index]
+    features = pos_features + neg_features
+    
+    pos_repr = pos_hyps.apply(lambda hyp: hyp.equals(utils.similarity(hyp, obj)), axis=1)
+    neg_repr = neg_hyps.apply(lambda hyp: hyp.equals(utils.similarity(hyp, obj)), axis=1)
+    
+    start_values = pos_repr.append(neg_repr).astype('int')
+#     columns=[obj.name], index=features,
+    result = pd.DataFrame(data=start_values, columns=[obj.name],dtype='int').T
+    result.columns=features
+    
+    return result
 
 
 
-
-
+# 'total_pos_objs':total_pos_objs,
+#                            'total_neg_objs':total_neg_objs, , total_pos_objs, total_neg_objs
 
 
 

@@ -7,3 +7,8 @@ PDF_Files/
 *.txt
 *.pem
 images/
+.DS_Store
+MasterLatex/
+data_partition_random/
+from_aws/
+models.ipynb
