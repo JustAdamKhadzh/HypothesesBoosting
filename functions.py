@@ -36,20 +36,12 @@ def get_similarity_sample_repr(sample: pd.DataFrame):
     
 #операция нахождения объектов по признаковому представлению
 def is_included_in_repr(d: pd.Series, train_data: pd.DataFrame):
-    """
-    returns objects from train dataset(from train pos and neg data) that is included in d representation
-    returns pd.DataFrame or None
-    """
     
-    d_list = []
+    inclusion = train_data.apply(lambda obj: d.equals(similarity(obj, d)), axis=1)
+    data = train_data.loc[inclusion]
     
-    for i, obj in train_data.iterrows():
-        feature_repr = similarity(obj, d)
-        is_included = d.equals(feature_repr)
-        if is_included:
-            d_list.append(obj)
-    d_list = pd.DataFrame(d_list) if len(d_list) > 0 else None
-    return d_list
+    data = data if data.shape[0] > 0 else None
+    return data
 
 
 def generate_local_area(obj: pd.Series, train_min: pd.Series, train_max: pd.Series):
@@ -79,9 +71,8 @@ def generate_local_area(obj: pd.Series, train_min: pd.Series, train_max: pd.Seri
     local_obj.name = index
     return local_obj
 
-def find_opt_local_area(obj: pd.Series, train_data: pd.DataFrame,
-                    trainx_min: pd.Series, trainx_max: pd.Series,
-                       frac: float, expanding_iters: int):
+def find_opt_local_area(obj: pd.Series, train_data: pd.DataFrame, trainx_min: pd.Series, trainx_max: pd.Series,
+                       frac: float, expanding_iters: int, attempts: int = 2):
 
     """
     generates optimal local area. Tries iteratively to generate local area
@@ -89,34 +80,42 @@ def find_opt_local_area(obj: pd.Series, train_data: pd.DataFrame,
     iterations.
     returns pd.Series if found opt local area or None
     """
-#     print(f'num_iters = {num_iters}')
-    iters = 0
-    is_found = False
+   
+
+    exp_attempts = 1
     d_local_area = obj
+    object_area = None
+    expand = expanding_iters
     objects_count = 0
     objects_count_thresh = int(train_data.shape[0] * frac)
-    while objects_count < objects_count_thresh and iters <= expanding_iters:
-        iters += 1 
-        if iters <= 100:
+    is_found = False
+
+    while not is_found and exp_attempts <= attempts:
+        print(f'exp_attempt = {exp_attempts}')
+        iters = 0
+        while iters <= expanding_iters:
             if iters % 10 == 0:
-                print(f"itr: {iters}")
-        else:
-            if iters % 100 == 0:
-                print(f"itr: {iters}")
-        d_local_area = generate_local_area(obj=d_local_area, train_min=trainx_min, train_max=trainx_max)
-        d_local_objects = is_included_in_repr(d=d_local_area, train_data=train_data)
-        if d_local_objects is not None:
-            objects_count = d_local_objects.shape[0]
-            #print(f"d_local_objects = {objects_count}")
-            if objects_count >= objects_count_thresh:
-                #print(f"found opt local area for object")
-                is_found = True
-                break
-#         else:
-#             print(f'found 0 objects in this local area')
+                print(f"iters = {iters}")
+            d_local_area = generate_local_area(obj=d_local_area, train_min=trainx_min, train_max=trainx_max)
+            
+            d_local_objects = is_included_in_repr(d=d_local_area, train_data=train_data)
+            
+            if d_local_objects is not None:
+                objects_count = d_local_objects.shape[0]
+                
+                if objects_count >= objects_count_thresh:
+                    is_found = True
+                    break
+            iters += 1 
+            
+        if not is_found:
+            print(f"not enough iterations. try more iterations/ Current num_iters = {expand}")
+            expand += expanding_iters
+            exp_attempts = exp_attempts + 1
+        if is_found:
+            print(f'found opt local area on {iters} iteration of {exp_attempts} attempt')
         
-    if not is_found:
-        print(f"not enough iterations. try more iterations/ Current num_iters = {expanding_iters}")
+        
     return d_local_area if is_found else None#, iters
 
 def generate_local_sample(d: pd.Series, train_data: pd.DataFrame, sample_size: int):
@@ -145,7 +144,6 @@ def generate_random_sample(train_data: pd.DataFrame, sample_size: int, d: pd.Ser
         inds = np.random.RandomState().choice(local_objects.index, replace=False, size=sample_size)
         sample = local_objects.loc[inds]
     else:
-        #print('using random sampling')
         inds = np.random.RandomState().choice(train_data.index, replace=False, size=sample_size)
         sample = train_data.loc[inds]
     return sample
@@ -231,11 +229,29 @@ def generate_hypothesis(iteration: int, obj: pd.Series, object_area: pd.Series, 
                         d_other_objects=d_other_objects, other_data=other_data, alpha=alpha)
 
         return result_hypothesis
+    
+    
+# def get_object_area(obj, train_data, trainx_min, trainx_max, frac, expanding_iters, itrs = 2):
+    
+#     object_area = None
+#     iters = itrs
+#     expand = expanding_iters
+#     while iters > 0:
+#         object_area = find_opt_local_area(obj=obj, train_data=train_data, trainx_min=trainx_min, 
+#                                           trainx_max=trainx_max, frac=frac, expanding_iters=expand)
+#         if object_area is None:
+#                 expand += expanding_iters
+#                 iters = iters - 1
+#         else:
+#             break
+
+#     return object_area
+    
         
 
 def mining_step(test_obj: pd.Series, train_pos: pd.DataFrame, train_neg: pd.DataFrame, sample_ratio: float, 
                 alpha: float, hypothesis_criterion: str, sample_type: str, trainx_min: pd.Series, 
-                trainx_max:pd.Series, fraction: float = 0.25, num_iters: int = 1000, expanding_iters: int = 50, 
+                trainx_max:pd.Series, fraction: float = 0.25, num_iters: int = 1000, expanding_iters: int = 40, 
                 mining_type: str = 'pos', verbose : bool = False, n_jobs : int = 4):
     """
     hypothesis_criterion: 'contr_class', если используем базовый критерий, 
@@ -251,21 +267,13 @@ def mining_step(test_obj: pd.Series, train_pos: pd.DataFrame, train_neg: pd.Data
     train_data = train_pos if mining_type == 'pos' else train_neg
     other_data = train_neg if mining_type == 'pos' else train_pos
     sample_size = int(train_data.shape[0] * sample_ratio)
-    #print('start generating hypothesises')
-    
+    object_area = None
     if sample_type == 'local':
-        #print(f'start searching optimal local area')
-        object_area = None
-        itrs = 3
-        while itrs > 0:
-            object_area = find_opt_local_area(obj=test_obj, train_data=train_data,
-                                                    trainx_min=trainx_min, trainx_max=trainx_max, 
-                                                    frac=fraction, expanding_iters=expanding_iters)
-            if object_area is None:
-                expanding_iters += expanding_iters
-                itrs = itrs - 1
-            else:
-                break
+#         object_area = get_object_area(obj=test_obj, train_data=train_data, trainx_min=trainx_min,
+#                                       trainx_max=trainx_max, frac, expanding_iters)
+        object_area = find_opt_local_area(obj=test_obj, train_data=train_data, trainx_min=trainx_min, 
+                                          trainx_max=trainx_max, frac=fraction, expanding_iters=expanding_iters
+                                         )
         if object_area is None:
             sample_type = 'random'
     else:
